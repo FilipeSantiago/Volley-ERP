@@ -13,15 +13,15 @@ class JWTTokenService:
     def __init__(self, *, auth_config: AuthConfig) -> None:
         self._auth_config = auth_config
 
-    def issue_token_pair(self, customer: dict[str, Any]) -> dict[str, Any]:
+    def issue_token_pair(self, user: dict[str, Any]) -> dict[str, Any]:
         access_token = self._issue_token(
-            customer=customer,
+            user=user,
             token_type="access",
             ttl_seconds=self._auth_config.jwt_access_ttl_seconds,
             secret=self._auth_config.jwt_access_secret,
         )
         refresh_token = self._issue_token(
-            customer=customer,
+            user=user,
             token_type="refresh",
             ttl_seconds=self._auth_config.jwt_refresh_ttl_seconds,
             secret=self._auth_config.jwt_refresh_secret,
@@ -50,7 +50,7 @@ class JWTTokenService:
     def _issue_token(
         self,
         *,
-        customer: dict[str, Any],
+        user: dict[str, Any],
         token_type: str,
         ttl_seconds: int,
         secret: str,
@@ -58,10 +58,13 @@ class JWTTokenService:
         now = datetime.now(timezone.utc)
         issued_at = int(now.timestamp())
         expires_at = int((now + timedelta(seconds=ttl_seconds)).timestamp())
+        subject = user.get("user_id")
+        if not isinstance(subject, str):
+            raise InvalidTokenError("Invalid token subject.")
         claims: dict[str, Any] = {
             "iss": self._auth_config.jwt_issuer,
             "aud": self._auth_config.jwt_audience,
-            "sub": customer["customer_id"],
+            "sub": subject,
             "type": token_type,
             "iat": issued_at,
             "nbf": issued_at,
@@ -69,12 +72,10 @@ class JWTTokenService:
             "jti": str(uuid.uuid4()),
         }
 
-        if customer.get("email"):
-            claims["email"] = customer["email"]
-        if customer.get("google_sub"):
-            claims["google_sub"] = customer["google_sub"]
-        if customer.get("doc_id"):
-            claims["doc_id"] = customer["doc_id"]
+        if user.get("email"):
+            claims["email"] = user["email"]
+        if user.get("google_sub"):
+            claims["google_sub"] = user["google_sub"]
 
         return jwt.encode(claims, secret, algorithm="HS256")
 

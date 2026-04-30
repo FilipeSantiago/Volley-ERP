@@ -1,83 +1,35 @@
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 
-from services.exceptions import (
-    AthleteCreationError,
-    InvalidAthletePayloadError,
-    InvalidTeamNameError,
-    RootFolderNotConfiguredError,
-    TeamAlreadyExistsError,
-    TeamCreationError,
-    TeamFolderNotFoundError,
-)
 from services.security.auth_exceptions import (
-    CustomerNotFoundError,
     DisallowedPlatformClientMismatchError,
+    ForbiddenError,
     InvalidCodeError,
     InvalidCodeVerifierError,
     InvalidRedirectURIError,
     InvalidStateError,
     InvalidTokenError,
+    InviteAlreadyAcceptedError,
+    InviteEmailMismatchError,
+    InviteExpiredError,
+    InviteNotFoundError,
     OAuthConfigurationError,
     OAuthProviderError,
+    OrganizationNotFoundError,
+    StorageOwnerConnectionMissingError,
+    TeamNotFoundError,
     TokenExpiredError,
     UnauthorizedError,
-    WorkspaceCreationError,
+    WorkspaceProvisioningFailedError,
 )
 
 
 def register_exception_handlers(app: FastAPI) -> None:
-    @app.exception_handler(InvalidTeamNameError)
-    async def handle_invalid_team_name(_, error: InvalidTeamNameError):
+    @app.exception_handler(ValueError)
+    async def handle_value_error(_, error: ValueError):
         return JSONResponse(
             status_code=400,
-            content={"error": "invalid_team_name", "message": str(error)},
-        )
-
-    @app.exception_handler(RootFolderNotConfiguredError)
-    async def handle_root_folder_not_configured(_, error: RootFolderNotConfiguredError):
-        return JSONResponse(
-            status_code=500,
-            content={"error": "root_folder_not_configured", "message": str(error)},
-        )
-
-    @app.exception_handler(TeamAlreadyExistsError)
-    async def handle_team_already_exists(_, error: TeamAlreadyExistsError):
-        return JSONResponse(
-            status_code=409,
-            content={
-                "error": "team_already_exists",
-                "message": str(error),
-                "team_folder_id": error.team_folder_id,
-            },
-        )
-
-    @app.exception_handler(TeamCreationError)
-    async def handle_team_creation_error(_, error: TeamCreationError):
-        return JSONResponse(
-            status_code=502,
-            content={"error": "team_creation_failed", "message": str(error)},
-        )
-
-    @app.exception_handler(InvalidAthletePayloadError)
-    async def handle_invalid_athlete_payload(_, error: InvalidAthletePayloadError):
-        return JSONResponse(
-            status_code=400,
-            content={"error": "invalid_athlete_payload", "message": str(error)},
-        )
-
-    @app.exception_handler(TeamFolderNotFoundError)
-    async def handle_team_folder_not_found(_, error: TeamFolderNotFoundError):
-        return JSONResponse(
-            status_code=404,
-            content={"error": "team_folder_not_found", "message": str(error)},
-        )
-
-    @app.exception_handler(AthleteCreationError)
-    async def handle_athlete_creation_error(_, error: AthleteCreationError):
-        return JSONResponse(
-            status_code=502,
-            content={"error": "athlete_creation_failed", "message": str(error)},
+            content={"error": "invalid_request", "message": str(error)},
         )
 
     @app.exception_handler(InvalidRedirectURIError)
@@ -158,16 +110,69 @@ def register_exception_handlers(app: FastAPI) -> None:
             headers={"WWW-Authenticate": "Bearer"},
         )
 
-    @app.exception_handler(CustomerNotFoundError)
-    async def handle_customer_not_found(_, error: CustomerNotFoundError):
+    @app.exception_handler(ForbiddenError)
+    async def handle_forbidden(_, error: ForbiddenError):
         return JSONResponse(
-            status_code=404,
-            content={"error": "customer_not_found", "message": str(error)},
+            status_code=403,
+            content={"error": "forbidden", "reason": error.reason},
         )
 
-    @app.exception_handler(WorkspaceCreationError)
-    async def handle_workspace_creation_error(_, error: WorkspaceCreationError):
+    @app.exception_handler(OrganizationNotFoundError)
+    async def handle_org_not_found(_, __: OrganizationNotFoundError):
         return JSONResponse(
-            status_code=502,
-            content={"error": "workspace_creation_failed", "message": str(error)},
+            status_code=404,
+            content={"error": "organization_not_found"},
+        )
+
+    @app.exception_handler(TeamNotFoundError)
+    async def handle_team_not_found(_, __: TeamNotFoundError):
+        return JSONResponse(
+            status_code=404,
+            content={"error": "team_not_found"},
+        )
+
+    @app.exception_handler(InviteNotFoundError)
+    async def handle_invite_not_found(_, __: InviteNotFoundError):
+        return JSONResponse(
+            status_code=404,
+            content={"error": "invite_not_found"},
+        )
+
+    @app.exception_handler(InviteExpiredError)
+    async def handle_invite_expired(_, __: InviteExpiredError):
+        return JSONResponse(
+            status_code=400,
+            content={"error": "invite_expired"},
+        )
+
+    @app.exception_handler(InviteAlreadyAcceptedError)
+    async def handle_invite_already_accepted(_, __: InviteAlreadyAcceptedError):
+        return JSONResponse(
+            status_code=400,
+            content={"error": "invite_already_accepted"},
+        )
+
+    @app.exception_handler(InviteEmailMismatchError)
+    async def handle_invite_email_mismatch(_, __: InviteEmailMismatchError):
+        return JSONResponse(
+            status_code=403,
+            content={"error": "invite_email_mismatch"},
+        )
+
+    @app.exception_handler(StorageOwnerConnectionMissingError)
+    async def handle_storage_owner_connection_missing(
+        _, __: StorageOwnerConnectionMissingError
+    ):
+        return JSONResponse(
+            status_code=409,
+            content={"error": "storage_owner_connection_missing"},
+        )
+
+    @app.exception_handler(WorkspaceProvisioningFailedError)
+    async def handle_workspace_provisioning_failed(
+        _, __: WorkspaceProvisioningFailedError
+    ):
+        return JSONResponse(
+            status_code=500,
+            content={"error": "workspace_provisioning_failed"},
         )

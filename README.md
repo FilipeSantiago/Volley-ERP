@@ -2,6 +2,13 @@
 
 FastAPI backend using Controller / Service / Repository architecture with Google Drive and Google Sheets integrations.
 
+### Current Access Model
+
+- Authentication identity is user-based (`user_id`).
+- Authorization is organization/team scoped in Firestore.
+- BYOS workspace provisioning is organization-scoped.
+- Invited users do not get personal Drive workspaces.
+
 ### Run
 
 ```bash
@@ -21,5 +28,5 @@ Set `GOOGLE_AUTH_MODE=adc` in `.env` (default in `.env.example`).
 ### Test
 
 ```bash
-python -m unittest discover -s tests
+.venv/bin/python -m unittest discover -s tests
 ```

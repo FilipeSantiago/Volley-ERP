@@ -5,100 +5,62 @@ from fastapi.testclient import TestClient
 
 from controllers.exception_handlers import register_exception_handlers
 from controllers.team_controller import create_teams_router
-from services.exceptions import (
-    InvalidTeamNameError,
-    RootFolderNotConfiguredError,
-    TeamAlreadyExistsError,
-    TeamCreationError,
-)
+from services.security.auth_exceptions import InvalidTokenError
+from services.security.auth_guard import AuthGuard
 
 
-class FakeTeamService:
-    def __init__(self) -> None:
-        self.result = {"ok": True}
-        self.error = None
-        self.received_team_name = None
+class FakeAuthServiceForGuard:
+    def validate_access_token(self, *, access_token: str):
+        if access_token == "valid-token":
+            return {"sub": "user-1", "email": "user@example.com", "google_sub": "g-1"}
+        raise InvalidTokenError("invalid_token")
 
-    def list_teams(self):
-        if self.error is not None:
-            raise self.error
-        return self.result
 
-    def create_team(self, team_name):
-        self.received_team_name = team_name
-        if self.error is not None:
-            raise self.error
-        return self.result
+class FakeOrganizationTeamService:
+    def create_team(self, *, user_id: str, org_id: str, payload: dict):
+        return {"team_id": "team-1", "name": payload["name"], "status": "active", "org_id": org_id}
+
+    def list_teams(self, *, user_id: str, org_id: str):
+        return {"items": [{"team_id": "team-1", "name": "Team One"}], "count": 1, "org_id": org_id}
+
+    def get_team(self, *, user_id: str, org_id: str, team_id: str):
+        return {"team_id": team_id, "name": "Team One", "status": "active", "org_id": org_id}
+
+    def add_team_member(self, *, user_id: str, org_id: str, team_id: str, payload: dict):
+        return {"status": "ok", "org_id": org_id, "team_id": team_id, "team_role": payload["team_role"]}
+
+    def list_team_members(self, *, user_id: str, org_id: str, team_id: str):
+        return {"items": [{"user_id": "user-2"}], "count": 1, "org_id": org_id, "team_id": team_id}
 
 
 class TeamControllerTestCase(unittest.TestCase):
     def setUp(self) -> None:
-        self.team_service = FakeTeamService()
         app = FastAPI()
         register_exception_handlers(app)
-        app.include_router(create_teams_router(self.team_service))
+        auth_guard = AuthGuard(auth_service=FakeAuthServiceForGuard())
+        app.include_router(create_teams_router(FakeOrganizationTeamService(), auth_guard))
         self.client = TestClient(app)
 
-    def test_list_teams_success(self):
-        self.team_service.result = {"items": [], "count": 0}
-
-        response = self.client.get("/teams")
-
-        self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.json(), {"items": [], "count": 0})
-
-    def test_list_teams_maps_service_errors(self):
-        test_cases = [
-            (
-                RootFolderNotConfiguredError("not configured"),
-                500,
-                "root_folder_not_configured",
-            ),
-            (TeamCreationError("failed"), 502, "team_creation_failed"),
-        ]
-        for error, expected_status, expected_code in test_cases:
-            self.team_service.error = error
-            response = self.client.get("/teams")
-            self.assertEqual(response.status_code, expected_status)
-            self.assertEqual(response.json()["error"], expected_code)
-
-    def test_create_team_requires_valid_json(self):
-        response = self.client.post(
-            "/teams",
-            data="not-json",
-            headers={"Content-Type": "application/json"},
-        )
-
-        self.assertEqual(response.status_code, 400)
-        self.assertEqual(response.json()["error"], "invalid_json")
+    def test_teams_endpoint_is_protected(self):
+        response = self.client.get("/teams", params={"org_id": "org-1"})
+        self.assertEqual(response.status_code, 401)
+        self.assertEqual(response.json()["error"], "unauthorized")
 
     def test_create_team_success(self):
-        self.team_service.result = {"team_folder_id": "team-folder-id"}
-
-        response = self.client.post("/teams", json={"team_name": "Team A"})
-
+        response = self.client.post(
+            "/teams",
+            json={"org_id": "org-1", "name": "Team One"},
+            headers={"Authorization": "Bearer valid-token"},
+        )
         self.assertEqual(response.status_code, 201)
-        self.assertEqual(response.json(), {"team_folder_id": "team-folder-id"})
-        self.assertEqual(self.team_service.received_team_name, "Team A")
+        self.assertEqual(response.json()["team_id"], "team-1")
 
-    def test_create_team_maps_service_errors(self):
-        test_cases = [
-            (InvalidTeamNameError("invalid"), 400, "invalid_team_name"),
-            (
-                TeamAlreadyExistsError(
-                    team_name="Team A",
-                    team_folder_id="team-folder-id",
-                ),
-                409,
-                "team_already_exists",
-            ),
-            (TeamCreationError("failed"), 502, "team_creation_failed"),
-        ]
-        for error, expected_status, expected_code in test_cases:
-            self.team_service.error = error
-            response = self.client.post("/teams", json={"team_name": "Team A"})
-            self.assertEqual(response.status_code, expected_status)
-            self.assertEqual(response.json()["error"], expected_code)
+    def test_list_teams_requires_org_id(self):
+        response = self.client.get(
+            "/teams",
+            headers={"Authorization": "Bearer valid-token"},
+        )
+        self.assertEqual(response.status_code, 422)
 
 
 if __name__ == "__main__":

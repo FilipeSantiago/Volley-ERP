@@ -1,4 +1,5 @@
-from services.athlete_service import AthleteService
-from services.team_service import TeamService
+from services.organization_service import OrganizationService
+from services.organization_team_service import OrganizationTeamService
+from services.workspace_service import WorkspaceService
 
-__all__ = ["AthleteService", "TeamService"]
+__all__ = ["OrganizationService", "OrganizationTeamService", "WorkspaceService"]

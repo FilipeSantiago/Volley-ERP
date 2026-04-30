@@ -54,6 +54,35 @@ class GoogleSheetsHelper:
         except HttpError as error:
             raise GoogleSheetsHelperError("Failed to add spreadsheet sheet.") from error
 
+    def rename_sheet(self, *, spreadsheet_id: str, sheet_id: int, new_title: str) -> None:
+        try:
+            from googleapiclient.errors import HttpError
+        except ModuleNotFoundError as error:
+            raise GoogleSheetsHelperError(
+                "google-api-python-client is not installed."
+            ) from error
+
+        body = {
+            "requests": [
+                {
+                    "updateSheetProperties": {
+                        "properties": {"sheetId": sheet_id, "title": new_title},
+                        "fields": "title",
+                    }
+                }
+            ]
+        }
+
+        try:
+            (
+                self._get_sheets_service()
+                .spreadsheets()
+                .batchUpdate(spreadsheetId=spreadsheet_id, body=body)
+                .execute()
+            )
+        except HttpError as error:
+            raise GoogleSheetsHelperError("Failed to rename spreadsheet sheet.") from error
+
     def get_values(self, *, spreadsheet_id: str, range_name: str) -> list[list[str]]:
         try:
             from googleapiclient.errors import HttpError
@@ -104,7 +133,12 @@ class GoogleSheetsHelper:
             raise GoogleSheetsHelperError("Failed to update spreadsheet values.") from error
 
     def append_values(
-        self, *, spreadsheet_id: str, range_name: str, values: list[list[str]]
+        self,
+        *,
+        spreadsheet_id: str,
+        range_name: str,
+        values: list[list[str]],
+        value_input_option: str = "USER_ENTERED",
     ) -> None:
         try:
             from googleapiclient.errors import HttpError
@@ -114,6 +148,9 @@ class GoogleSheetsHelper:
             ) from error
 
         body = {"values": values}
+        normalized_value_input_option = value_input_option.strip().upper()
+        if normalized_value_input_option not in {"USER_ENTERED", "RAW"}:
+            raise GoogleSheetsHelperError("Invalid value_input_option.")
 
         try:
             (
@@ -123,7 +160,7 @@ class GoogleSheetsHelper:
                 .append(
                     spreadsheetId=spreadsheet_id,
                     range=range_name,
-                    valueInputOption="USER_ENTERED",
+                    valueInputOption=normalized_value_input_option,
                     insertDataOption="INSERT_ROWS",
                     body=body,
                 )

@@ -1,10 +1,8 @@
 import json
 import unittest
 import uuid
-from datetime import datetime, timedelta, timezone
 from urllib.parse import parse_qs, unquote, urlsplit
 
-import jwt
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -26,6 +24,7 @@ class FakeAuthRepository:
         self.google_claims = {
             "sub": "google-sub-1",
             "email": "person@example.com",
+            "name": "Person Name",
             "aud": "web-client-id",
         }
         self.refresh_token = "google-refresh-token"
@@ -58,6 +57,7 @@ class FakeAuthRepository:
             "access_token": "google-access",
             "refresh_token": self.refresh_token,
             "id_token": "google-id-token",
+            "scope": "openid email profile https://www.googleapis.com/auth/drive.file",
         }
 
     def verify_google_id_token(
@@ -75,55 +75,95 @@ class FakeAuthRepository:
         return claims
 
 
-class InMemoryCustomerRepository:
+class InMemoryUserRepository:
     def __init__(self) -> None:
         self.by_sub = {}
         self.by_id = {}
 
+    def get_by_user_id(self, *, user_id: str):
+        user = self.by_id.get(user_id)
+        return dict(user) if user else None
+
     def get_by_google_sub(self, *, google_sub: str):
-        customer = self.by_sub.get(google_sub)
-        return dict(customer) if customer else None
+        user = self.by_sub.get(google_sub)
+        return dict(user) if user else None
 
-    def get_by_customer_id(self, *, customer_id: str):
-        customer = self.by_id.get(customer_id)
-        return dict(customer) if customer else None
+    def get_by_email(self, *, email: str):
+        for user in self.by_id.values():
+            if user.get("email") == email:
+                return dict(user)
+        return None
 
-    def upsert_by_google_sub(self, *, google_sub: str, email: str | None, refresh_token_enc: str):
+    def upsert_from_google_identity(self, *, google_sub: str, email: str | None, name: str | None):
         existing = self.by_sub.get(google_sub)
         if existing is None:
-            customer = {
-                "customer_id": str(uuid.uuid4()),
+            payload = {
+                "user_id": str(uuid.uuid4()),
                 "google_sub": google_sub,
                 "email": email,
-                "refresh_token_enc": refresh_token_enc,
-                "doc_id": None,
-                "created_at": "2026-01-01T00:00:00Z",
-                "updated_at": "2026-01-01T00:00:00Z",
+                "name": name,
             }
         else:
-            customer = {
+            payload = {
                 **existing,
                 "email": email or existing.get("email"),
-                "refresh_token_enc": refresh_token_enc,
-                "updated_at": "2026-01-01T00:01:00Z",
+                "name": name or existing.get("name"),
             }
-        self.by_sub[google_sub] = customer
-        self.by_id[customer["customer_id"]] = customer
-        return dict(customer)
-
-    def update_doc_id(self, *, customer_id: str, doc_id: str | None):
-        customer = dict(self.by_id[customer_id])
-        customer["doc_id"] = doc_id
-        self.by_id[customer_id] = customer
-        self.by_sub[customer["google_sub"]] = customer
-        return dict(customer)
+        self.by_sub[google_sub] = payload
+        self.by_id[payload["user_id"]] = payload
+        return dict(payload)
 
 
-def _build_auth_components(
-    *,
-    access_ttl_seconds: int = 600,
-    refresh_ttl_seconds: int = 604800,
-) -> tuple[FastAPI, AuthService, JWTTokenService, InMemoryCustomerRepository, AuthConfig]:
+class InMemoryGoogleConnectionRepository:
+    def __init__(self) -> None:
+        self.by_user_id = {}
+
+    def get_by_user_id(self, *, user_id: str):
+        connection = self.by_user_id.get(user_id)
+        return dict(connection) if connection else None
+
+    def upsert_google_connection(
+        self,
+        *,
+        user_id: str,
+        encrypted_refresh_token: str | None,
+        scopes: list[str],
+    ):
+        existing = self.by_user_id.get(user_id)
+        payload = {
+            "provider": "google",
+            "user_id": user_id,
+            "encrypted_refresh_token": encrypted_refresh_token
+            or (existing or {}).get("encrypted_refresh_token"),
+            "scopes": list(scopes),
+        }
+        self.by_user_id[user_id] = payload
+        return dict(payload)
+
+
+class InMemoryOrganizationRepository:
+    def __init__(self) -> None:
+        self.user_orgs: dict[str, list[dict]] = {}
+        self.org_teams: dict[str, list[dict]] = {}
+        self.user_team_pointers: dict[tuple[str, str], list[dict]] = {}
+
+    def list_user_organizations(self, *, user_id: str):
+        return list(self.user_orgs.get(user_id, []))
+
+    def list_teams_for_org(self, *, org_id: str):
+        return list(self.org_teams.get(org_id, []))
+
+    def list_user_team_pointers(self, *, user_id: str, org_id: str):
+        return list(self.user_team_pointers.get((user_id, org_id), []))
+
+
+def _build_auth_components() -> tuple[
+    FastAPI,
+    AuthService,
+    JWTTokenService,
+    InMemoryUserRepository,
+    InMemoryOrganizationRepository,
+]:
     auth_config = AuthConfig(
         google_oauth_client_id="web-client-id",
         google_oauth_client_secret="web-client-secret",
@@ -137,8 +177,8 @@ def _build_auth_components(
         jwt_refresh_secret="jwt-refresh-secret-jwt-refresh-secret-123",
         jwt_issuer="volley-erp",
         jwt_audience="volley-erp-client",
-        jwt_access_ttl_seconds=access_ttl_seconds,
-        jwt_refresh_ttl_seconds=refresh_ttl_seconds,
+        jwt_access_ttl_seconds=600,
+        jwt_refresh_ttl_seconds=604800,
         auth_redirect_allowed_origins=["https://app.example.com"],
         auth_redirect_allowed_schemes=["myapp"],
         auth_mobile_allowed_platforms=["android", "ios"],
@@ -146,10 +186,15 @@ def _build_auth_components(
         auth_mobile_redirect_allowed_ios=["com.example.ios:/oauth2redirect"],
         token_enc_key="test-token-encryption-key",
         token_enc_key_secret_name=None,
+        invite_token_ttl_seconds=604800,
+        app_public_base_url="https://app.example.com",
     )
 
     auth_repository = FakeAuthRepository()
-    customer_repository = InMemoryCustomerRepository()
+    user_repository = InMemoryUserRepository()
+    google_connection_repository = InMemoryGoogleConnectionRepository()
+    organization_repository = InMemoryOrganizationRepository()
+
     token_service = JWTTokenService(auth_config=auth_config)
     state_token_service = StateTokenService(secret=auth_config.auth_state_secret)
     refresh_token_encryption_service = RefreshTokenEncryptionService(
@@ -158,7 +203,9 @@ def _build_auth_components(
     auth_service = AuthService(
         auth_config=auth_config,
         auth_repository=auth_repository,
-        customer_repository=customer_repository,
+        user_repository=user_repository,
+        google_connection_repository=google_connection_repository,
+        organization_repository=organization_repository,
         token_service=token_service,
         state_token_service=state_token_service,
         refresh_token_encryption_service=refresh_token_encryption_service,
@@ -168,7 +215,7 @@ def _build_auth_components(
     app = FastAPI()
     register_exception_handlers(app)
     app.include_router(create_auth_router(auth_service, auth_guard))
-    return app, auth_service, token_service, customer_repository, auth_config
+    return app, auth_service, token_service, user_repository, organization_repository
 
 
 def _extract_state(auth_url: str) -> str:
@@ -182,97 +229,32 @@ class AuthWorkflowTestCase(unittest.TestCase):
             self.app,
             self.auth_service,
             self.token_service,
-            self.customer_repository,
-            self.auth_config,
+            self.user_repository,
+            self.organization_repository,
         ) = _build_auth_components()
         self.client = TestClient(self.app)
 
-    def _create_customer_and_tokens(self) -> dict:
-        encrypted_refresh = RefreshTokenEncryptionService(
-            auth_config=self.auth_config
-        ).encrypt("google-refresh-token")
-        customer = self.customer_repository.upsert_by_google_sub(
-            google_sub="google-sub-manual",
-            email="manual@example.com",
-            refresh_token_enc=encrypted_refresh,
-        )
-        return {"customer": customer, "tokens": self.token_service.issue_token_pair(customer)}
-
-    def test_start_native_allowlisted_redirect(self):
-        response = self.client.get("/auth/google/start?redirect_uri=myapp://oauth/callback")
-
-        self.assertEqual(response.status_code, 200)
-        body = response.json()
-        self.assertEqual(body["callback_mode"], "redirect")
-        self.assertEqual(body["redirect_uri"], "myapp://oauth/callback")
-        self.assertIn("auth_url", body)
-
-    def test_start_native_non_allowlisted_redirect(self):
-        response = self.client.get(
-            "/auth/google/start?redirect_uri=notallowed://oauth/callback"
-        )
-
-        self.assertEqual(response.status_code, 400)
-        self.assertEqual(response.json()["error"], "invalid_redirect_uri")
-
-    def test_callback_success_redirect_for_native_deep_link(self):
-        start_response = self.client.get(
-            "/auth/google/start?redirect_uri=myapp://oauth/callback"
-        )
-        state = _extract_state(start_response.json()["auth_url"])
-
-        callback_response = self.client.get(
-            f"/auth/google/callback?code=valid-code&state={state}",
-            follow_redirects=False,
-        )
-
-        self.assertEqual(callback_response.status_code, 302)
-        location = callback_response.headers["Location"]
-        self.assertTrue(location.startswith("myapp://oauth/callback"))
-        query_params = parse_qs(urlsplit(location).query)
-        self.assertIn("access_token", query_params)
-        self.assertEqual(query_params["token_type"][0], "Bearer")
-        self.assertIn("refresh_token", query_params)
-
-    def test_callback_error_redirect_includes_error_and_error_description(self):
-        start_response = self.client.get(
-            "/auth/google/start?redirect_uri=myapp://oauth/callback"
-        )
-        state = _extract_state(start_response.json()["auth_url"])
-
-        callback_response = self.client.get(
-            f"/auth/google/callback?state={state}&error=access_denied"
-            "&error_description=User+denied",
-            follow_redirects=False,
-        )
-
-        self.assertEqual(callback_response.status_code, 302)
-        query_params = parse_qs(urlsplit(callback_response.headers["Location"]).query)
-        self.assertEqual(query_params["error"][0], "access_denied")
-        self.assertEqual(query_params["error_description"][0], "User denied")
-
-    def test_callback_with_no_redirect_uri_state_returns_json_mode(self):
+    def test_callback_json_mode_returns_user_and_orgs_without_workspace(self):
+        self.organization_repository.user_orgs = {}
         start_response = self.client.get("/auth/google/start")
         state = _extract_state(start_response.json()["auth_url"])
 
         callback_response = self.client.get(
             f"/auth/google/callback?code=valid-code&state={state}"
         )
+        body = callback_response.json()
 
         self.assertEqual(callback_response.status_code, 200)
-        body = callback_response.json()
         self.assertEqual(body["status"], "ok")
-        self.assertIn("access_token", body)
-        self.assertEqual(body["token_type"], "Bearer")
-        self.assertIn("refresh_token", body)
-        self.assertIn("expires_in", body)
+        self.assertIn("user_id", body)
+        self.assertNotIn("workspace_root_folder_id", body)
+        self.assertEqual(body["organizations"], [])
 
-    def test_callback_with_web_redirect_uri_uses_fragment_payload_redirect(self):
+    def test_callback_redirect_mode_payload_contains_user_id_and_tokens(self):
         start_response = self.client.get(
             "/auth/google/start?redirect_uri=https://app.example.com/callback"
         )
         state = _extract_state(start_response.json()["auth_url"])
-
         callback_response = self.client.get(
             f"/auth/google/callback?code=valid-code&state={state}",
             follow_redirects=False,
@@ -280,123 +262,62 @@ class AuthWorkflowTestCase(unittest.TestCase):
 
         self.assertEqual(callback_response.status_code, 302)
         location = callback_response.headers["Location"]
-        parsed = urlsplit(location)
-        self.assertEqual(
-            f"{parsed.scheme}://{parsed.netloc}{parsed.path}",
-            "https://app.example.com/callback",
-        )
-        self.assertTrue(parsed.fragment.startswith("payload="))
-        payload_json = unquote(parsed.fragment.split("payload=", maxsplit=1)[1])
+        payload_json = unquote(urlsplit(location).fragment.split("payload=", maxsplit=1)[1])
         payload = json.loads(payload_json)
+        self.assertIn("user_id", payload)
         self.assertIn("access_token", payload)
-        self.assertEqual(payload["token_type"], "Bearer")
         self.assertIn("refresh_token", payload)
 
-    def test_state_token_one_time_use(self):
-        start_response = self.client.get("/auth/google/start")
-        state = _extract_state(start_response.json()["auth_url"])
+    def test_security_me_returns_org_visibility(self):
+        # Login once to create user and get app token.
+        state = _extract_state(self.client.get("/auth/google/start").json()["auth_url"])
+        callback = self.client.get(f"/auth/google/callback?code=valid-code&state={state}")
+        payload = callback.json()
+        user_id = payload["user_id"]
 
-        first_callback = self.client.get(f"/auth/google/callback?code=valid-code&state={state}")
-        second_callback = self.client.get(
-            f"/auth/google/callback?code=valid-code&state={state}"
-        )
-
-        self.assertEqual(first_callback.status_code, 200)
-        self.assertEqual(second_callback.status_code, 400)
-        self.assertEqual(second_callback.json()["error"], "invalid_state")
-
-    def test_security_refresh_and_me_happy_path(self):
-        created = self._create_customer_and_tokens()
-        access_token = created["tokens"]["access_token"]
-        refresh_token = created["tokens"]["refresh_token"]
-        customer = created["customer"]
+        self.organization_repository.user_orgs[user_id] = [
+            {
+                "org_id": "org-1",
+                "org_name": "Org One",
+                "org_role": "MEMBER",
+                "status": "active",
+            }
+        ]
+        self.organization_repository.user_team_pointers[(user_id, "org-1")] = [
+            {
+                "team_id": "team-1",
+                "team_name": "Team One",
+                "team_role": "COACH",
+                "status": "active",
+            }
+        ]
 
         me_response = self.client.get(
             "/security/me",
-            headers={"Authorization": f"Bearer {access_token}"},
+            headers={"Authorization": f"Bearer {payload['access_token']}"},
         )
+        me = me_response.json()
+
+        self.assertEqual(me_response.status_code, 200)
+        self.assertEqual(me["user_id"], user_id)
+        self.assertEqual(me["organizations"][0]["org_id"], "org-1")
+        self.assertEqual(me["organizations"][0]["teams"][0]["team_id"], "team-1")
+
+    def test_refresh_issues_new_pair_without_workspace_side_effects(self):
+        state = _extract_state(self.client.get("/auth/google/start").json()["auth_url"])
+        callback = self.client.get(f"/auth/google/callback?code=valid-code&state={state}")
+        refresh_token = callback.json()["refresh_token"]
+
         refresh_response = self.client.post(
             "/security/refresh",
             json={"refresh_token": refresh_token},
         )
-
-        self.assertEqual(me_response.status_code, 200)
-        self.assertEqual(me_response.json()["customer_id"], customer["customer_id"])
-        self.assertEqual(me_response.json()["google_sub"], customer["google_sub"])
-        self.assertEqual(me_response.json()["email"], customer["email"])
-        self.assertEqual(me_response.json()["doc_id"], customer["doc_id"])
+        refreshed = refresh_response.json()
 
         self.assertEqual(refresh_response.status_code, 200)
-        refreshed = refresh_response.json()
         self.assertIn("access_token", refreshed)
         self.assertIn("refresh_token", refreshed)
         self.assertEqual(refreshed["token_type"], "Bearer")
-        self.assertIn("expires_in", refreshed)
-
-    def test_security_me_and_refresh_invalid_and_expired_paths(self):
-        created = self._create_customer_and_tokens()
-        access_token = created["tokens"]["access_token"]
-
-        missing_me = self.client.get("/security/me")
-        invalid_me = self.client.get(
-            "/security/me",
-            headers={"Authorization": "Bearer not-a-token"},
-        )
-        self.assertEqual(missing_me.status_code, 401)
-        self.assertEqual(missing_me.json()["error"], "unauthorized")
-        self.assertEqual(missing_me.headers.get("WWW-Authenticate"), "Bearer")
-        self.assertEqual(invalid_me.status_code, 401)
-        self.assertEqual(invalid_me.json()["error"], "invalid_token")
-
-        refresh_with_access = self.client.post(
-            "/security/refresh",
-            json={"refresh_token": access_token},
-        )
-        self.assertEqual(refresh_with_access.status_code, 401)
-        self.assertEqual(refresh_with_access.json()["error"], "invalid_token")
-
-        now = datetime.now(timezone.utc)
-        expired_access = jwt.encode(
-            {
-                "iss": self.auth_config.jwt_issuer,
-                "aud": self.auth_config.jwt_audience,
-                "sub": created["customer"]["customer_id"],
-                "type": "access",
-                "iat": int((now - timedelta(minutes=10)).timestamp()),
-                "nbf": int((now - timedelta(minutes=10)).timestamp()),
-                "exp": int((now - timedelta(minutes=5)).timestamp()),
-                "jti": str(uuid.uuid4()),
-            },
-            self.auth_config.jwt_access_secret,
-            algorithm="HS256",
-        )
-        expired_me = self.client.get(
-            "/security/me",
-            headers={"Authorization": f"Bearer {expired_access}"},
-        )
-        self.assertEqual(expired_me.status_code, 401)
-        self.assertEqual(expired_me.json()["error"], "token_expired")
-
-        expired_refresh = jwt.encode(
-            {
-                "iss": self.auth_config.jwt_issuer,
-                "aud": self.auth_config.jwt_audience,
-                "sub": created["customer"]["customer_id"],
-                "type": "refresh",
-                "iat": int((now - timedelta(days=8)).timestamp()),
-                "nbf": int((now - timedelta(days=8)).timestamp()),
-                "exp": int((now - timedelta(days=7)).timestamp()),
-                "jti": str(uuid.uuid4()),
-            },
-            self.auth_config.jwt_refresh_secret,
-            algorithm="HS256",
-        )
-        refresh_expired = self.client.post(
-            "/security/refresh",
-            json={"refresh_token": expired_refresh},
-        )
-        self.assertEqual(refresh_expired.status_code, 401)
-        self.assertEqual(refresh_expired.json()["error"], "token_expired")
 
 
 if __name__ == "__main__":

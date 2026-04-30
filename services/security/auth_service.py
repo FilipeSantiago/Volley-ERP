@@ -4,7 +4,15 @@ from typing import Any
 from urllib.parse import parse_qsl, quote, urlencode, urlsplit, urlunsplit
 
 from repositories.auth_repository import AuthRepository, AuthRepositoryError
-from repositories.customer_repository import CustomerRepository
+from repositories.google_connection_repository import (
+    GoogleConnectionRepository,
+    GoogleConnectionRepositoryError,
+)
+from repositories.organization_repository import (
+    OrganizationRepository,
+    OrganizationRepositoryError,
+)
+from repositories.user_repository import UserRepository, UserRepositoryError
 from services.security.auth_config import AuthConfig
 from services.security.auth_exceptions import (
     DisallowedPlatformClientMismatchError,
@@ -39,14 +47,18 @@ class AuthService:
         *,
         auth_config: AuthConfig,
         auth_repository: AuthRepository,
-        customer_repository: CustomerRepository,
+        user_repository: UserRepository,
+        google_connection_repository: GoogleConnectionRepository,
+        organization_repository: OrganizationRepository,
         token_service: JWTTokenService,
         state_token_service: StateTokenService,
         refresh_token_encryption_service: RefreshTokenEncryptionService,
     ) -> None:
         self._auth_config = auth_config
         self._auth_repository = auth_repository
-        self._customer_repository = customer_repository
+        self._user_repository = user_repository
+        self._google_connection_repository = google_connection_repository
+        self._organization_repository = organization_repository
         self._token_service = token_service
         self._state_token_service = state_token_service
         self._refresh_token_encryption_service = refresh_token_encryption_service
@@ -134,18 +146,21 @@ class AuthService:
                 error=error.error,
                 error_description=error.error_description,
             ) from error
-        customer = self._upsert_customer_from_google_claims(
+
+        user = self._upsert_user_and_google_connection(
             google_claims=google_claims,
             refresh_token=token_payload.get("refresh_token"),
+            scopes=self._resolve_scopes_from_token_payload(token_payload=token_payload),
         )
-        token_pair = self._token_service.issue_token_pair(customer)
+        organizations = self._list_user_organizations(user_id=user["user_id"])
+        token_pair = self._token_service.issue_token_pair(user)
 
         json_payload = {
             "status": "ok",
-            "customer_id": customer["customer_id"],
-            "google_sub": customer["google_sub"],
-            "email": customer.get("email"),
-            "doc_id": customer.get("doc_id"),
+            "user_id": user["user_id"],
+            "google_sub": user["google_sub"],
+            "email": user.get("email"),
+            "organizations": organizations,
             **token_pair,
         }
 
@@ -153,6 +168,7 @@ class AuthService:
             success_redirect_url = self._build_success_redirect_url(
                 redirect_uri=redirect_uri,
                 token_pair=token_pair,
+                user=user,
             )
             return {"mode": "redirect", "redirect_url": success_redirect_url}
 
@@ -223,46 +239,62 @@ class AuthService:
                 "disallowed_platform_client_mismatch"
             )
 
-        customer = self._upsert_customer_from_google_claims(
+        user = self._upsert_user_and_google_connection(
             google_claims=google_claims,
             refresh_token=token_payload.get("refresh_token"),
+            scopes=self._resolve_scopes_from_token_payload(token_payload=token_payload),
         )
-        token_pair = self._token_service.issue_token_pair(customer)
+        token_pair = self._token_service.issue_token_pair(user)
+        organizations = self._list_user_organizations(user_id=user["user_id"])
         return {
             "status": "ok",
-            "customer_id": customer["customer_id"],
-            "google_sub": customer["google_sub"],
-            "email": customer.get("email"),
-            "doc_id": customer.get("doc_id"),
+            "user_id": user["user_id"],
+            "google_sub": user["google_sub"],
+            "email": user.get("email"),
+            "organizations": organizations,
             **token_pair,
         }
 
     def refresh_token_pair(self, *, refresh_token: str) -> dict[str, Any]:
         claims = self._token_service.validate_refresh_token(refresh_token)
-        customer_id = claims.get("sub")
-        if not isinstance(customer_id, str):
+        user_id = claims.get("sub")
+        if not isinstance(user_id, str):
             raise InvalidTokenError("invalid_token")
 
-        customer = self._customer_repository.get_by_customer_id(customer_id=customer_id)
-        if customer is None:
+        try:
+            user = self._user_repository.get_by_user_id(user_id=user_id)
+        except UserRepositoryError as error:
+            raise InvalidTokenError("invalid_token") from error
+        if user is None:
             raise InvalidTokenError("invalid_token")
 
-        return self._token_service.issue_token_pair(customer)
+        return self._token_service.issue_token_pair(user)
 
-    def get_me(self, *, access_token: str) -> dict[str, Any]:
-        claims = self._token_service.validate_access_token(access_token)
+    def get_me_from_claims(self, *, claims: dict[str, Any]) -> dict[str, Any]:
+        user_id = claims.get("sub")
+        if not isinstance(user_id, str):
+            raise InvalidTokenError("invalid_token")
+
+        try:
+            user = self._user_repository.get_by_user_id(user_id=user_id)
+        except UserRepositoryError as error:
+            raise InvalidTokenError("invalid_token") from error
+        if user is None:
+            raise InvalidTokenError("invalid_token")
+
+        organizations = self._list_user_organizations(user_id=user_id)
         return {
-            "customer_id": claims.get("sub"),
-            "google_sub": claims.get("google_sub"),
-            "email": claims.get("email"),
-            "doc_id": claims.get("doc_id"),
+            "user_id": user_id,
+            "google_sub": user.get("google_sub") or claims.get("google_sub"),
+            "email": user.get("email") or claims.get("email"),
+            "organizations": organizations,
         }
 
     def validate_access_token(self, *, access_token: str) -> dict[str, Any]:
         return self._token_service.validate_access_token(access_token)
 
-    def issue_token_pair_for_customer(self, *, customer: dict[str, Any]) -> dict[str, Any]:
-        return self._token_service.issue_token_pair(customer)
+    def issue_token_pair_for_user(self, *, user: dict[str, Any]) -> dict[str, Any]:
+        return self._token_service.issue_token_pair(user)
 
     def _exchange_web_code(self, *, authorization_code: str) -> dict[str, Any]:
         try:
@@ -280,8 +312,12 @@ class AuthService:
                 error_description=error.error_description,
             ) from error
 
-    def _upsert_customer_from_google_claims(
-        self, *, google_claims: dict[str, Any], refresh_token: Any
+    def _upsert_user_and_google_connection(
+        self,
+        *,
+        google_claims: dict[str, Any],
+        refresh_token: Any,
+        scopes: list[str],
     ) -> dict[str, Any]:
         google_sub = google_claims.get("sub")
         if not isinstance(google_sub, str) or not google_sub:
@@ -289,30 +325,138 @@ class AuthService:
                 error="invalid_id_token",
                 error_description="Google subject was not provided by ID token.",
             )
+
         email = google_claims.get("email")
         if email is not None and not isinstance(email, str):
             email = None
+        name = google_claims.get("name")
+        if name is not None and not isinstance(name, str):
+            name = None
 
-        existing_customer = self._customer_repository.get_by_google_sub(
-            google_sub=google_sub
-        )
+        try:
+            user = self._user_repository.upsert_from_google_identity(
+                google_sub=google_sub,
+                email=email,
+                name=name,
+            )
+        except UserRepositoryError as error:
+            raise OAuthProviderError(
+                error="user_upsert_failed",
+                error_description="Failed to upsert user profile.",
+            ) from error
+
+        encrypted_refresh_token: str | None = None
         if isinstance(refresh_token, str) and refresh_token:
-            refresh_token_enc = self._refresh_token_encryption_service.encrypt(
+            encrypted_refresh_token = self._refresh_token_encryption_service.encrypt(
                 refresh_token
             )
-        elif existing_customer and existing_customer.get("refresh_token_enc"):
-            refresh_token_enc = existing_customer["refresh_token_enc"]
         else:
-            raise OAuthProviderError(
-                error="invalid_grant",
-                error_description="OAuth provider did not return a refresh token.",
-            )
+            try:
+                existing_connection = self._google_connection_repository.get_by_user_id(
+                    user_id=user["user_id"]
+                )
+            except GoogleConnectionRepositoryError as error:
+                raise OAuthProviderError(
+                    error="google_connection_failed",
+                    error_description="Failed to fetch Google connection.",
+                ) from error
+            if existing_connection is None:
+                raise OAuthProviderError(
+                    error="invalid_grant",
+                    error_description="OAuth provider did not return a refresh token.",
+                )
 
-        return self._customer_repository.upsert_by_google_sub(
-            google_sub=google_sub,
-            email=email,
-            refresh_token_enc=refresh_token_enc,
-        )
+        try:
+            self._google_connection_repository.upsert_google_connection(
+                user_id=user["user_id"],
+                encrypted_refresh_token=encrypted_refresh_token,
+                scopes=scopes,
+            )
+        except GoogleConnectionRepositoryError as error:
+            raise OAuthProviderError(
+                error="google_connection_failed",
+                error_description="Failed to persist Google connection.",
+            ) from error
+
+        return user
+
+    def _list_user_organizations(self, *, user_id: str) -> list[dict[str, Any]]:
+        try:
+            org_pointers = self._organization_repository.list_user_organizations(
+                user_id=user_id
+            )
+        except OrganizationRepositoryError as error:
+            raise OAuthProviderError(
+                error="organization_lookup_failed",
+                error_description="Failed to load user organizations.",
+            ) from error
+
+        items: list[dict[str, Any]] = []
+        for pointer in org_pointers:
+            org_id = pointer.get("org_id")
+            if not isinstance(org_id, str):
+                continue
+            if pointer.get("status") != "active":
+                continue
+
+            org_role = pointer.get("org_role")
+            can_access_all_teams = org_role in {"OWNER", "ADMIN"}
+            teams: list[dict[str, Any]] = []
+
+            try:
+                if can_access_all_teams:
+                    org_teams = self._organization_repository.list_teams_for_org(org_id=org_id)
+                    teams = [
+                        {
+                            "team_id": team.get("team_id"),
+                            "name": team.get("name"),
+                            "team_role": "ORG_ADMIN",
+                            "status": team.get("status"),
+                        }
+                        for team in org_teams
+                        if team.get("status") == "active"
+                    ]
+                else:
+                    team_pointers = self._organization_repository.list_user_team_pointers(
+                        user_id=user_id,
+                        org_id=org_id,
+                    )
+                    teams = [
+                        {
+                            "team_id": team.get("team_id"),
+                            "name": team.get("team_name"),
+                            "team_role": team.get("team_role"),
+                            "status": team.get("status"),
+                        }
+                        for team in team_pointers
+                        if team.get("status") == "active"
+                    ]
+            except OrganizationRepositoryError as error:
+                raise OAuthProviderError(
+                    error="organization_lookup_failed",
+                    error_description="Failed to load organization teams.",
+                ) from error
+
+            items.append(
+                {
+                    "org_id": org_id,
+                    "name": pointer.get("org_name"),
+                    "org_role": org_role,
+                    "status": pointer.get("status"),
+                    "can_access_all_teams": can_access_all_teams,
+                    "teams": teams,
+                }
+            )
+        return items
+
+    @staticmethod
+    def _resolve_scopes_from_token_payload(*, token_payload: dict[str, Any]) -> list[str]:
+        raw_scopes = token_payload.get("scope")
+        if isinstance(raw_scopes, str):
+            scopes = [item.strip() for item in raw_scopes.split(" ") if item.strip()]
+            if scopes:
+                return scopes
+        return list(GOOGLE_SCOPES)
 
     def _validate_and_normalize_redirect_uri(self, redirect_uri: str) -> str:
         normalized = redirect_uri.strip()
@@ -393,13 +537,15 @@ class AuthService:
         return client_id, client_secret
 
     def _build_success_redirect_url(
-        self, *, redirect_uri: str, token_pair: dict[str, Any]
+        self, *, redirect_uri: str, token_pair: dict[str, Any], user: dict[str, Any]
     ) -> str:
         parsed = urlsplit(redirect_uri)
         payload = {
             "access_token": token_pair["access_token"],
             "token_type": token_pair["token_type"],
             "refresh_token": token_pair["refresh_token"],
+            "user_id": user["user_id"],
+            "email": user.get("email"),
         }
 
         if parsed.scheme.lower() in {"http", "https"}:
@@ -422,11 +568,12 @@ class AuthService:
 
     @staticmethod
     def _build_redirect_with_query_params(
-        redirect_uri: str, extra_params: dict[str, str]
+        redirect_uri: str, extra_params: dict[str, Any]
     ) -> str:
         parsed = urlsplit(redirect_uri)
         query_params = dict(parse_qsl(parsed.query, keep_blank_values=True))
-        query_params.update(extra_params)
+        serialized_extra = {key: str(value) for key, value in extra_params.items()}
+        query_params.update(serialized_extra)
         query_string = urlencode(query_params)
         return urlunsplit(
             (parsed.scheme, parsed.netloc, parsed.path, query_string, parsed.fragment)

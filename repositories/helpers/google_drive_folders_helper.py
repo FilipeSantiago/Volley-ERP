@@ -132,6 +132,52 @@ class GoogleDriveFoldersHelper:
 
         return self._format_folder(folder)
 
+    def get_file_by_id(self, *, file_id: str) -> dict[str, str | None] | None:
+        try:
+            from googleapiclient.errors import HttpError
+        except ModuleNotFoundError as error:
+            raise GoogleDriveHelperError(
+                "google-api-python-client is not installed."
+            ) from error
+
+        try:
+            file_item = (
+                self._get_drive_service()
+                .files()
+                .get(fileId=file_id, fields="id,name,mimeType,webViewLink")
+                .execute()
+            )
+        except HttpError as error:
+            if error.resp.status in {403, 404}:
+                return None
+            raise GoogleDriveHelperError("Failed to fetch file from Google Drive.") from error
+
+        return self._format_file(file_item)
+
+    def download_file(self, *, file_id: str) -> bytes:
+        try:
+            from googleapiclient.errors import HttpError
+            from googleapiclient.http import MediaIoBaseDownload
+        except ModuleNotFoundError as error:
+            raise GoogleDriveHelperError(
+                "google-api-python-client is not installed."
+            ) from error
+
+        stream = BytesIO()
+        request = self._get_drive_service().files().get_media(fileId=file_id)
+        downloader = MediaIoBaseDownload(stream, request)
+        done = False
+
+        try:
+            while not done:
+                _, done = downloader.next_chunk()
+        except HttpError as error:
+            raise GoogleDriveHelperError(
+                "Failed to download file from Google Drive."
+            ) from error
+
+        return stream.getvalue()
+
     def find_file_by_name(
         self,
         *,

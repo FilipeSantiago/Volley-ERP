@@ -31,6 +31,8 @@ class AuthConfig:
     auth_mobile_redirect_allowed_ios: list[str]
     token_enc_key: str | None
     token_enc_key_secret_name: str | None
+    invite_token_ttl_seconds: int
+    app_public_base_url: str
 
     @staticmethod
     def from_env() -> "AuthConfig":
@@ -79,4 +81,6 @@ class AuthConfig:
             ),
             token_enc_key=os.getenv("TOKEN_ENC_KEY", "dev-token-enc-key"),
             token_enc_key_secret_name=os.getenv("TOKEN_ENC_KEY_SECRET_NAME"),
+            invite_token_ttl_seconds=int(os.getenv("INVITE_TOKEN_TTL_SECONDS", "604800")),
+            app_public_base_url=os.getenv("APP_PUBLIC_BASE_URL", "http://localhost:3000"),
         )

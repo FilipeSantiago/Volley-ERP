@@ -88,14 +88,10 @@ def create_auth_router(auth_service: AuthService, auth_guard: AuthGuard) -> APIR
     def security_me(
         claims: dict[str, Any] = Depends(access_claims_dependency),
     ):
+        me = auth_service.get_me_from_claims(claims=claims)
         return JSONResponse(
             status_code=status.HTTP_200_OK,
-            content={
-                "customer_id": claims.get("sub"),
-                "google_sub": claims.get("google_sub"),
-                "email": claims.get("email"),
-                "doc_id": claims.get("doc_id"),
-            },
+            content=me,
         )
 
     return auth_router

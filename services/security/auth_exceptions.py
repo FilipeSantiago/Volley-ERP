@@ -41,17 +41,47 @@ class UnauthorizedError(AuthError):
     pass
 
 
-class CustomerNotFoundError(AuthError):
-    pass
-
-
-class WorkspaceCreationError(AuthError):
-    pass
-
-
 class EncryptionKeyError(AuthError):
     pass
 
 
 class OAuthConfigurationError(AuthError):
+    pass
+
+
+class ForbiddenError(AuthError):
+    def __init__(self, reason: str) -> None:
+        self.reason = reason
+        super().__init__(reason)
+
+
+class OrganizationNotFoundError(AuthError):
+    pass
+
+
+class TeamNotFoundError(AuthError):
+    pass
+
+
+class InviteNotFoundError(AuthError):
+    pass
+
+
+class InviteExpiredError(AuthError):
+    pass
+
+
+class InviteAlreadyAcceptedError(AuthError):
+    pass
+
+
+class InviteEmailMismatchError(AuthError):
+    pass
+
+
+class StorageOwnerConnectionMissingError(AuthError):
+    pass
+
+
+class WorkspaceProvisioningFailedError(AuthError):
     pass

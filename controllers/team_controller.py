@@ -1,52 +1,99 @@
-import json
-from typing import Any
+from typing import Annotated, Any
 
-from fastapi import APIRouter, Request, status
-from fastapi.responses import JSONResponse
+from fastapi import APIRouter, Depends
 
-from services.team_service import TeamService
+from controllers.security_dependencies import create_access_claims_dependency
+from models.team import (
+    CreateTeamRequest,
+    Team,
+    TeamDetailQuery,
+    TeamListResponse,
+    TeamMemberCreateRequest,
+    TeamMemberMutationResponse,
+    TeamMembersResponse,
+    TeamQuery,
+)
+from services.organization_team_service import OrganizationTeamService
+from services.security.auth_guard import AuthGuard
 
 
-def create_teams_router(team_service: TeamService) -> APIRouter:
-    teams_router = APIRouter()
+def create_teams_router(
+    organization_team_service: OrganizationTeamService,
+    auth_guard: AuthGuard,
+) -> APIRouter:
+    router = APIRouter()
+    access_claims_dependency = create_access_claims_dependency(auth_guard=auth_guard)
 
-    @teams_router.get("/teams")
-    def list_teams():
-        result = team_service.list_teams()
-        return JSONResponse(
-            status_code=status.HTTP_200_OK,
-            content=result,
+    @router.post("/teams", response_model=Team, status_code=201)
+    def create_team(
+        body: CreateTeamRequest,
+        claims: dict[str, Any] = Depends(access_claims_dependency),
+    ):
+        user_id = claims.get("sub")
+        result = organization_team_service.create_team(
+            user_id=user_id,
+            org_id=body.org_id,
+            payload={
+                "name": body.name,
+                "category": body.category,
+                "gender": body.gender,
+            },
         )
+        return result
 
-    @teams_router.post("/teams")
-    async def create_team(request: Request):
-        payload = await _parse_json_payload(request)
-        if payload is None:
-            return JSONResponse(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                content={
-                    "error": "invalid_json",
-                    "message": "Request body must be valid JSON.",
-                },
-            )
-
-        team_name = payload.get("team_name")
-        result = team_service.create_team(team_name)
-
-        return JSONResponse(
-            status_code=status.HTTP_201_CREATED,
-            content=result,
+    @router.get("/teams", response_model=TeamListResponse, status_code=200)
+    def list_teams(
+        query: Annotated[TeamQuery, Depends()],
+        claims: dict[str, Any] = Depends(access_claims_dependency),
+    ):
+        user_id = claims.get("sub")
+        result = organization_team_service.list_teams(
+            user_id=user_id,
+            org_id=query.org_id,
         )
+        return result
 
-    return teams_router
+    @router.get("/teams/detail", response_model=Team, status_code=200)
+    def get_team(
+        query: Annotated[TeamDetailQuery, Depends()],
+        claims: dict[str, Any] = Depends(access_claims_dependency),
+    ):
+        user_id = claims.get("sub")
+        result = organization_team_service.get_team(
+            user_id=user_id,
+            org_id=query.org_id,
+            team_id=query.team_id,
+        )
+        return result
 
+    @router.post("/teams/members", response_model=TeamMemberMutationResponse, status_code=200)
+    def add_team_member(
+        body: TeamMemberCreateRequest,
+        claims: dict[str, Any] = Depends(access_claims_dependency),
+    ):
+        user_id = claims.get("sub")
+        result = organization_team_service.add_team_member(
+            user_id=user_id,
+            org_id=body.org_id,
+            team_id=body.team_id,
+            payload={
+                "email": body.email,
+                "team_role": body.team_role,
+            },
+        )
+        return result
 
-async def _parse_json_payload(request: Request) -> dict[str, Any] | None:
-    try:
-        payload = await request.json()
-    except (json.JSONDecodeError, UnicodeDecodeError):
-        return None
+    @router.get("/teams/members", response_model=TeamMembersResponse, status_code=200)
+    def list_team_members(
+        query: Annotated[TeamDetailQuery, Depends()],
+        claims: dict[str, Any] = Depends(access_claims_dependency),
+    ):
+        user_id = claims.get("sub")
+        result = organization_team_service.list_team_members(
+            user_id=user_id,
+            org_id=query.org_id,
+            team_id=query.team_id,
+        )
+        return result
 
-    if not isinstance(payload, dict):
-        return None
-    return payload
+    return router
