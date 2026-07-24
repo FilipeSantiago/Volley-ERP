@@ -1,13 +1,17 @@
 from dependency_injector import containers, providers
 
 from repositories.auth_repository import AuthRepository
+from repositories.coach_repository import CoachRepository
 from repositories.google_connection_repository import GoogleConnectionRepository
 from repositories.google_drive_repository import GoogleDriveRepository
 from repositories.helpers.google_oauth_helper import GoogleOAuthHelper
 from repositories.invite_repository import InviteRepository
+from repositories.monthly_fees_repository import MonthlyFeesRepository
 from repositories.organization_repository import OrganizationRepository
 from repositories.team_workspace_repository import TeamWorkspaceRepository
 from repositories.user_repository import UserRepository
+from services.coach_service import CoachService
+from services.monthly_fees_service import MonthlyFeesService
 from services.organization_service import OrganizationService
 from services.organization_team_service import OrganizationTeamService
 from services.security.auth_config import AuthConfig
@@ -28,6 +32,8 @@ class ApplicationContainer(containers.DeclarativeContainer):
     google_oauth_helper = providers.Singleton(GoogleOAuthHelper)
     google_drive_repository = providers.Singleton(GoogleDriveRepository)
     team_workspace_repository = providers.Singleton(TeamWorkspaceRepository)
+    coach_repository = providers.Singleton(CoachRepository)
+    monthly_fees_repository = providers.Singleton(MonthlyFeesRepository)
 
     auth_repository = providers.Singleton(
         AuthRepository,
@@ -92,6 +98,25 @@ class ApplicationContainer(containers.DeclarativeContainer):
         workspace_service=workspace_service,
         authorization_service=authorization_service,
         invite_service=invite_service,
+    )
+    coach_service = providers.Singleton(
+        CoachService,
+        auth_config=auth_config,
+        organization_repository=organization_repository,
+        google_connection_repository=google_connection_repository,
+        coach_repository=coach_repository,
+        refresh_token_encryption_service=refresh_token_encryption_service,
+        authorization_service=authorization_service,
+        workspace_service=workspace_service,
+    )
+    monthly_fees_service = providers.Singleton(
+        MonthlyFeesService,
+        auth_config=auth_config,
+        organization_repository=organization_repository,
+        google_connection_repository=google_connection_repository,
+        refresh_token_encryption_service=refresh_token_encryption_service,
+        authorization_service=authorization_service,
+        monthly_fees_repository=monthly_fees_repository,
     )
     auth_service = providers.Singleton(
         AuthService,

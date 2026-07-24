@@ -11,7 +11,9 @@ import uvicorn
 from containers import ApplicationContainer
 from controllers.athletes_controller import create_athletes_router
 from controllers.auth_controller import create_auth_router
+from controllers.coach_controller import create_coach_router
 from controllers.exception_handlers import register_exception_handlers
+from controllers.monthly_fees_controller import create_monthly_fees_router
 from controllers.organization_controller import create_organizations_router
 from controllers.team_controller import create_teams_router
 
@@ -67,6 +69,18 @@ app.include_router(
 app.include_router(
     create_athletes_router(
         container.organization_team_service(),
+        container.auth_guard(),
+    )
+)
+app.include_router(
+    create_coach_router(
+        container.coach_service(),
+        container.auth_guard(),
+    )
+)
+app.include_router(
+    create_monthly_fees_router(
+        container.monthly_fees_service(),
         container.auth_guard(),
     )
 )

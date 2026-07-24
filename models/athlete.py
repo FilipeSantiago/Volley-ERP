@@ -18,6 +18,8 @@ class Athlete(BaseModel):
     rg: str | None = None
     email: str | None = None
     photo_link: str | None = None
+    org_id: str | None = None
+    team_id: str | None = None
     created_at: str | None = None
     updated_at: str | None = None
 
@@ -57,12 +59,12 @@ class AthleteUpdateRequest(AthleteWriteFields):
 
 class AthleteListQuery(BaseModel):
     org_id: str = Field(min_length=1)
-    team_id: str = Field(min_length=1)
+    team_id: str | None = Field(default=None, min_length=1)
 
 
 class AthleteListResponse(BaseModel):
     org_id: str
-    team_id: str
+    team_id: str | None = None
     athletes_sheet_id: str | None = None
     athletes_sheet_url: str | None = None
     items: list[Athlete]

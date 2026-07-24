@@ -34,6 +34,10 @@ class AuthConfig:
     invite_token_ttl_seconds: int
     app_public_base_url: str
 
+    def __post_init__(self) -> None:
+        _require_min_length("JWT_ACCESS_SECRET", self.jwt_access_secret, minimum=32)
+        _require_min_length("JWT_REFRESH_SECRET", self.jwt_refresh_secret, minimum=32)
+
     @staticmethod
     def from_env() -> "AuthConfig":
         return AuthConfig(
@@ -84,3 +88,8 @@ class AuthConfig:
             invite_token_ttl_seconds=int(os.getenv("INVITE_TOKEN_TTL_SECONDS", "604800")),
             app_public_base_url=os.getenv("APP_PUBLIC_BASE_URL", "http://localhost:3000"),
         )
+
+
+def _require_min_length(name: str, value: str, *, minimum: int) -> None:
+    if len(value.encode("utf-8")) < minimum:
+        raise ValueError(f"{name} must be at least {minimum} bytes long.")

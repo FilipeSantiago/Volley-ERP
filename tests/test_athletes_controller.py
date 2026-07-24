@@ -37,7 +37,7 @@ class FakeOrganizationTeamService:
             "position": payload["position"],
         }
 
-    def list_athletes(self, *, user_id: str, org_id: str, team_id: str):
+    def list_athletes(self, *, user_id: str, org_id: str, team_id: str | None = None):
         return {"org_id": org_id, "team_id": team_id, "items": [], "count": 0}
 
     def update_athlete(
@@ -130,6 +130,15 @@ class AthletesControllerTestCase(unittest.TestCase):
             headers={"Authorization": "Bearer valid-token"},
         )
         self.assertEqual(response.status_code, 422)
+
+    def test_list_athletes_allows_missing_team_id(self):
+        response = self.client.get(
+            "/athletes",
+            params={"org_id": "org-1"},
+            headers={"Authorization": "Bearer valid-token"},
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertIsNone(response.json()["team_id"])
 
     def test_update_athlete_success(self):
         response = self.client.put(

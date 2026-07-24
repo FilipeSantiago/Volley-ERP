@@ -47,6 +47,8 @@ TEAM_ROLE_PERMISSIONS: dict[str, set[str]] = {
         "players.manage",
         "matches.read",
         "matches.manage",
+        "finance.read",
+        "finance.manage",
         "data.read",
         "data.write",
     },

@@ -268,6 +268,28 @@ class AuthWorkflowTestCase(unittest.TestCase):
         self.assertIn("access_token", payload)
         self.assertIn("refresh_token", payload)
 
+    def test_callback_accepts_state_issued_by_different_service_instance(self):
+        start_response = self.client.get(
+            "/auth/google/start?redirect_uri=https://app.example.com/callback"
+        )
+        state = _extract_state(start_response.json()["auth_url"])
+
+        (
+            other_app,
+            _other_auth_service,
+            _other_token_service,
+            _other_user_repository,
+            _other_organization_repository,
+        ) = _build_auth_components()
+        other_client = TestClient(other_app)
+
+        callback_response = other_client.get(
+            f"/auth/google/callback?code=valid-code&state={state}",
+            follow_redirects=False,
+        )
+
+        self.assertEqual(callback_response.status_code, 302)
+
     def test_security_me_returns_org_visibility(self):
         # Login once to create user and get app token.
         state = _extract_state(self.client.get("/auth/google/start").json()["auth_url"])
@@ -302,6 +324,43 @@ class AuthWorkflowTestCase(unittest.TestCase):
         self.assertEqual(me["user_id"], user_id)
         self.assertEqual(me["organizations"][0]["org_id"], "org-1")
         self.assertEqual(me["organizations"][0]["teams"][0]["team_id"], "team-1")
+
+    def test_security_me_for_org_admin_includes_all_active_org_teams(self):
+        state = _extract_state(self.client.get("/auth/google/start").json()["auth_url"])
+        callback = self.client.get(f"/auth/google/callback?code=valid-code&state={state}")
+        payload = callback.json()
+        user_id = payload["user_id"]
+
+        self.organization_repository.user_orgs[user_id] = [
+            {
+                "org_id": "org-1",
+                "org_name": "Org One",
+                "org_role": "ADMIN",
+                "status": "active",
+            }
+        ]
+        self.organization_repository.org_teams["org-1"] = [
+            {"team_id": "team-a", "name": "Team A", "status": "active"},
+            {"team_id": "team-b", "name": "Team B", "status": "active"},
+            {"team_id": "team-c", "name": "Team C", "status": "inactive"},
+        ]
+
+        me_response = self.client.get(
+            "/security/me",
+            headers={"Authorization": f"Bearer {payload['access_token']}"},
+        )
+        me = me_response.json()
+
+        self.assertEqual(me_response.status_code, 200)
+        self.assertEqual(me["organizations"][0]["org_id"], "org-1")
+        self.assertEqual(
+            {team["team_id"] for team in me["organizations"][0]["teams"]},
+            {"team-a", "team-b"},
+        )
+        self.assertEqual(
+            {team["team_role"] for team in me["organizations"][0]["teams"]},
+            {"ORG_ADMIN"},
+        )
 
     def test_refresh_issues_new_pair_without_workspace_side_effects(self):
         state = _extract_state(self.client.get("/auth/google/start").json()["auth_url"])

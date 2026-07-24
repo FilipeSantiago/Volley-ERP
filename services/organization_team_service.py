@@ -285,15 +285,62 @@ class OrganizationTeamService:
         *,
         user_id: str,
         org_id: str,
-        team_id: str,
+        team_id: str | None = None,
     ) -> dict[str, Any]:
-        self._authorization_service.require_team_permission(
+        if isinstance(team_id, str):
+            normalized_team_id = team_id.strip()
+        else:
+            normalized_team_id = ""
+
+        if normalized_team_id:
+            self._authorization_service.require_team_permission(
+                user_id=user_id,
+                org_id=org_id,
+                team_id=normalized_team_id,
+                permission="players.read",
+            )
+            team = self._get_team_or_raise(org_id=org_id, team_id=normalized_team_id)
+            return self._list_athletes_for_team(
+                org_id=org_id,
+                team_id=normalized_team_id,
+                team=team,
+            )
+
+        if not self._authorization_service.can_access_all_teams(
             user_id=user_id,
             org_id=org_id,
-            team_id=team_id,
-            permission="players.read",
-        )
-        team = self._get_team_or_raise(org_id=org_id, team_id=team_id)
+        ):
+            raise ForbiddenError("team_scope_required")
+
+        teams = self._list_accessible_teams_for_user_in_org(user_id=user_id, org_id=org_id)
+        items: list[dict[str, Any]] = []
+        for team in teams:
+            accessible_team_id = team.get("team_id")
+            if not isinstance(accessible_team_id, str) or not accessible_team_id.strip():
+                continue
+            team_payload = self._list_athletes_for_team(
+                org_id=org_id,
+                team_id=accessible_team_id,
+                team=team,
+            )
+            items.extend(team_payload["items"])
+
+        return {
+            "org_id": org_id,
+            "team_id": None,
+            "athletes_sheet_id": None,
+            "athletes_sheet_url": None,
+            "items": items,
+            "count": len(items),
+        }
+
+    def _list_athletes_for_team(
+        self,
+        *,
+        org_id: str,
+        team_id: str,
+        team: dict[str, Any],
+    ) -> dict[str, Any]:
         organization = self._get_organization_or_raise(org_id=org_id)
 
         storage_owner_user_id = organization.get("storage_owner_user_id")
@@ -323,7 +370,15 @@ class OrganizationTeamService:
         except TeamWorkspaceRepositoryError as error:
             raise ValueError("Failed to fetch athletes data.") from error
 
-        items = athletes_data["items"]
+        items = [
+            {
+                **item,
+                "org_id": org_id,
+                "team_id": team_id,
+            }
+            for item in athletes_data["items"]
+            if isinstance(item, dict)
+        ]
         return {
             "org_id": org_id,
             "team_id": team_id,

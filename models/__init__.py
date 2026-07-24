@@ -7,6 +7,13 @@ from models.athlete import (
     AthleteUpdateRequest,
     AthleteWriteResponse,
 )
+from models.coach import (
+    CoachCreateRequest,
+    CoachQuery,
+    CoachResponse,
+    CoachUpdateRequest,
+    CoachWriteFields,
+)
 from models.enums import AthletePosition, AthleteSize
 from models.organization import (
     CreateOrganizationRequest,
@@ -14,6 +21,13 @@ from models.organization import (
     Organization,
     OrganizationListResponse,
     OrganizationTeam,
+)
+from models.monthly_fee import (
+    MonthlyFeeCreateRequest,
+    MonthlyFeeEntry,
+    MonthlyFeeListQuery,
+    MonthlyFeeListResponse,
+    MonthlyFeeUpdateRequest,
 )
 from models.team import (
     CreateTeamRequest,
@@ -37,9 +51,19 @@ __all__ = [
     "AthleteWriteResponse",
     "AthletePosition",
     "AthleteSize",
+    "CoachCreateRequest",
+    "CoachQuery",
+    "CoachResponse",
+    "CoachUpdateRequest",
+    "CoachWriteFields",
     "CreateOrganizationRequest",
     "CreateOrganizationResponse",
     "CreateTeamRequest",
+    "MonthlyFeeCreateRequest",
+    "MonthlyFeeEntry",
+    "MonthlyFeeListQuery",
+    "MonthlyFeeListResponse",
+    "MonthlyFeeUpdateRequest",
     "Organization",
     "OrganizationListResponse",
     "OrganizationTeam",

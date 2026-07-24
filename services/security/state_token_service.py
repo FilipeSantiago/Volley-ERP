@@ -2,7 +2,6 @@ import base64
 import hashlib
 import hmac
 import json
-import threading
 import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -19,31 +18,10 @@ def _base64url_decode(raw: str) -> bytes:
     return base64.urlsafe_b64decode(raw + padding)
 
 
-class _NonceStore:
-    def __init__(self) -> None:
-        self._consumed: dict[str, int] = {}
-        self._lock = threading.Lock()
-
-    def consume_once(self, *, nonce: str, expires_at: int) -> None:
-        now = int(datetime.now(timezone.utc).timestamp())
-        with self._lock:
-            stale_nonces = [
-                key for key, value in self._consumed.items() if value <= now
-            ]
-            for key in stale_nonces:
-                del self._consumed[key]
-
-            if nonce in self._consumed:
-                raise InvalidStateError("invalid_state")
-
-            self._consumed[nonce] = expires_at
-
-
 class StateTokenService:
     def __init__(self, *, secret: str, ttl_seconds: int = 600) -> None:
         self._secret = secret.encode("utf-8")
         self._ttl_seconds = ttl_seconds
-        self._nonce_store = _NonceStore()
 
     def issue_state_token(
         self,
@@ -102,10 +80,5 @@ class StateTokenService:
             raise InvalidStateError("invalid_state")
         if payload["exp"] <= now or payload["iat"] > now:
             raise InvalidStateError("invalid_state")
-
-        self._nonce_store.consume_once(
-            nonce=payload["nonce"],
-            expires_at=payload["exp"],
-        )
 
         return payload

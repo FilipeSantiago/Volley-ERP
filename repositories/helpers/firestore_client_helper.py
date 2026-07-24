@@ -33,4 +33,6 @@ def resolve_firestore_client(
             client_kwargs["database"] = resolved_database_id
         return firestore.Client(**client_kwargs)
     except Exception as error:
-        raise FirestoreClientHelperError("Failed to initialize Firestore client.") from error
+        raise FirestoreClientHelperError(
+            f"Failed to initialize Firestore client: {error}"
+        ) from error

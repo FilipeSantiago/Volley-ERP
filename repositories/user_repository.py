@@ -33,7 +33,7 @@ class UserRepository:
         try:
             snapshot = self._collection().document(user_id).get()
         except Exception as error:
-            raise UserRepositoryError("Failed to fetch user by user_id.") from error
+            raise UserRepositoryError(f"Failed to fetch user by user_id: {error}") from error
 
         if not snapshot.exists:
             return None
@@ -44,7 +44,9 @@ class UserRepository:
             query = self._collection().where("google_sub", "==", google_sub).limit(1)
             documents = list(query.stream())
         except Exception as error:
-            raise UserRepositoryError("Failed to fetch user by google_sub.") from error
+            raise UserRepositoryError(
+                f"Failed to fetch user by google_sub: {error}"
+            ) from error
 
         if not documents:
             return None
@@ -55,7 +57,7 @@ class UserRepository:
             query = self._collection().where("email", "==", email).limit(1)
             documents = list(query.stream())
         except Exception as error:
-            raise UserRepositoryError("Failed to fetch user by email.") from error
+            raise UserRepositoryError(f"Failed to fetch user by email: {error}") from error
 
         if not documents:
             return None
@@ -95,7 +97,7 @@ class UserRepository:
         try:
             self._collection().document(user_id).set(payload)
         except Exception as error:
-            raise UserRepositoryError("Failed to upsert user.") from error
+            raise UserRepositoryError(f"Failed to upsert user: {error}") from error
 
         return payload
 

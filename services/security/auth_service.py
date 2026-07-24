@@ -342,7 +342,7 @@ class AuthService:
         except UserRepositoryError as error:
             raise OAuthProviderError(
                 error="user_upsert_failed",
-                error_description="Failed to upsert user profile.",
+                error_description=str(error),
             ) from error
 
         encrypted_refresh_token: str | None = None
