@@ -2,6 +2,8 @@ import os
 from datetime import datetime, timezone
 from typing import Any
 
+from models.entity import GoogleConnection
+
 from repositories.helpers.firestore_client_helper import (
     FirestoreClientHelperError,
     resolve_firestore_client,
@@ -62,7 +64,9 @@ class GoogleConnectionRepository:
                 "scopes": scopes,
                 "created_at": now,
                 "updated_at": now,
+                "last_oauth_login_at": now,
             }
+            payload = self._serialize_document(GoogleConnection.model_validate(payload))
         else:
             payload = {
                 **existing,
@@ -70,7 +74,9 @@ class GoogleConnectionRepository:
                 or existing.get("encrypted_refresh_token"),
                 "scopes": scopes or existing.get("scopes", []),
                 "updated_at": now,
+                "last_oauth_login_at": now,
             }
+            payload = self._serialize_document(GoogleConnection.model_validate(payload))
 
         try:
             self._collection().document(user_id).set(payload)
@@ -102,9 +108,17 @@ class GoogleConnectionRepository:
             raise GoogleConnectionRepositoryError(
                 "Google connection document has invalid format."
             )
-        if payload.get("provider") != "google":
-            raise GoogleConnectionRepositoryError("Invalid Google connection provider.")
-        return payload
+        try:
+            connection = GoogleConnection.model_validate(payload)
+        except Exception as error:
+            raise GoogleConnectionRepositoryError(
+                f"Google connection document has invalid format: {error}"
+            ) from error
+        return GoogleConnectionRepository._serialize_document(connection)
+
+    @staticmethod
+    def _serialize_document(connection: GoogleConnection) -> dict[str, Any]:
+        return connection.model_dump(mode="json")
 
 
 def _now_iso() -> str:

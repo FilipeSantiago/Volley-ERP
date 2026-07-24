@@ -1,7 +1,8 @@
 import os
-import uuid
 from datetime import datetime, timezone
 from typing import Any
+
+from models.entity import User
 
 from repositories.helpers.firestore_client_helper import (
     FirestoreClientHelperError,
@@ -74,9 +75,7 @@ class UserRepository:
         now = _now_iso()
 
         if existing is None:
-            user_id = str(uuid.uuid4())
             payload = {
-                "user_id": user_id,
                 "google_sub": google_sub,
                 "email": email,
                 "name": name,
@@ -84,6 +83,9 @@ class UserRepository:
                 "updated_at": now,
                 "last_login_at": now,
             }
+            user = User.model_validate(payload)
+            user_id = user.user_id
+            payload = self._serialize_document(user)
         else:
             user_id = existing["user_id"]
             payload = {
@@ -93,6 +95,7 @@ class UserRepository:
                 "updated_at": now,
                 "last_login_at": now,
             }
+            payload = self._serialize_document(User.model_validate(payload))
 
         try:
             self._collection().document(user_id).set(payload)
@@ -120,9 +123,15 @@ class UserRepository:
     def _validate_document(payload: Any) -> dict[str, Any]:
         if not isinstance(payload, dict):
             raise UserRepositoryError("User document has invalid format.")
-        if not isinstance(payload.get("user_id"), str):
-            raise UserRepositoryError("User document does not include user_id.")
-        return payload
+        try:
+            user = User.model_validate(payload)
+        except Exception as error:
+            raise UserRepositoryError(f"User document has invalid format: {error}") from error
+        return UserRepository._serialize_document(user)
+
+    @staticmethod
+    def _serialize_document(user: User) -> dict[str, Any]:
+        return user.model_dump(mode="json")
 
 
 def _now_iso() -> str:
